@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.local
+.env.production
+!.env.example
+!.env.production.example
+
+# Logs
+*.log
+logs/
+keep_alive.log
+keep_alive.pid
+uvicorn.err.log
+uvicorn.out.log
+
+# Uploads (user data - never commit)
+uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temp files
+*.tmp
+_*.txt
+_*.json
+_policies_raw.txt
+_adm_tok.txt
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# Test artifacts
+frontend/vite-e2e.log
+frontend/vite-test.log
+frontend/vite.log
+frontend/vite.out.log
+
+# Build artifacts
+*.pid

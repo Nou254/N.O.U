@@ -1,0 +1,57 @@
+{
+  "name": "N.O.U Digital Systems",
+  "short_name": "N.O.U",
+  "description": "N.O.U Digital Systems - centralized web platform for customer interaction, software distribution, projects and competency-based recruitment.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#0f172a",
+  "lang": "en",
+  "categories": ["business", "productivity", "education"],
+  "icons": [
+    {
+      "src": "/favicon1.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon1-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Products",
+      "url": "/products",
+      "description": "Browse N.O.U software products"
+    },
+    {
+      "name": "Careers",
+      "url": "/careers",
+      "description": "Apply and take assessments"
+    },
+    {
+      "name": "Invest",
+      "url": "/investors",
+      "description": "Submit investment interest"
+    }
+  ]
+}

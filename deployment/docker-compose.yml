@@ -1,0 +1,124 @@
+version: '3.8'
+
+# N.O.U Digital Systems - production topology.
+#   nginx (entry :80/:443)  -->  frontend (PWA bundle)
+#                            \->  backend xN (load-balanced, least_conn)
+#                                     --> MySQL 8
+#                                     \-> Redis (optional, required for multi-worker)
+#
+# Scale the backend with:  docker compose up -d --scale backend=3
+
+services:
+  # Entry point: static PWA + load-balanced API proxy + rate limiting.
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/nou.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - nou-network
+    restart: unless-stopped
+
+  # Frontend: pre-built PWA bundle.
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_BASE_URL=/api/v1   # relative - same bundle behind the proxy
+    networks:
+      - nou-network
+    restart: unless-stopped
+
+  # Backend API: scale horizontally (--scale backend=N). Multi-worker/scale
+  # requires REDIS_URL so rate limits + token revocation are shared.
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=mysql+aiomysql://nou:${DB_PASSWORD:-nou_password}@db:3306/nou_database
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env}
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - REDIS_URL=${REDIS_URL:-}
+      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - EMAILS_FROM_EMAIL=${EMAILS_FROM_EMAIL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - nou-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+        reservations:
+          cpus: "0.5"
+          memory: 256m
+
+  # MySQL 8 (the app is built on MySQL/aiomysql - not Postgres).
+  db:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_DATABASE=nou_database
+      - MYSQL_USER=nou
+      - MYSQL_PASSWORD=${DB_PASSWORD:-nou_password}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-root_password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - nou-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD:-root_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Optional shared state: enables multi-worker rate limiting + token revocation.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - nou-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+volumes:
+  mysql_data:
+  uploads_data:
+  redis_data:
+
+networks:
+  nou-network:
+    driver: bridge
