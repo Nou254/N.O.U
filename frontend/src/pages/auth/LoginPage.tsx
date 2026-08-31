@@ -38,7 +38,7 @@ const LoginPage = () => {
   useEffect(() => {
     if (step !== 'otp') return
     window.history.pushState(null, '', window.location.href)
-    const handler = (e: PopStateEvent) => {
+    const handler = () => {
       window.history.pushState(null, '', window.location.href)
     }
     window.addEventListener('popstate', handler)
