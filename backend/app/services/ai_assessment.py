@@ -230,10 +230,12 @@ async def generate_questions(
             part_hint = ""
             if parts:
                 part = parts[(len(questions) // max(1, questions_per_module)) % len(parts)]
+                # Build the allowed‑types string safely
+                types_str = " / ".join(part.get('types') or ['written_explanation'])
                 part_hint = (
                     f"\nTag every question with part=\"{part.get('part', 'position')}\" "
                     f"and a suitable question_type from the allowed types "
-                    f"({" / ".join(part.get('types') or ['written_explanation'])}). "
+                    f"({types_str}). "
                     f"The {part.get('label', '')} part tests "
                     f"{part.get('focus', 'professional ability')}."
                 )
