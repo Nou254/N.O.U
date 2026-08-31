@@ -4,16 +4,35 @@ Application configuration settings.
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
-from pydantic_settings.sources import DotEnvSettingsSource
+from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
 from typing import List, Optional, Any
 import re
 
 
+# ---- Custom DotEnv source (handles comma-separated strings) ----
 class CommaSeparatedDotEnvSettingsSource(DotEnvSettingsSource):
     """
     Dotenv source that keeps comma-separated values as raw strings instead of
-    forcing JSON decoding on complex fields (e.g. CORS_ORIGINS), matching the
-    format documented in .env.example.
+    forcing JSON decoding on complex fields (e.g. CORS_ORIGINS).
+    """
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if field_name in {
+            "CORS_ORIGINS",
+            "GROQ_API_KEYS",
+            "GROQ_ASSESSMENT_KEYS",
+            "GROQ_CHATBOT_KEYS",
+            "GROQ_COMMUNITY_KEYS",
+        }:
+            return value
+        return super().decode_complex_value(field_name, field, value)
+
+
+# ---- Custom Env source (handles comma-separated strings from system env) ----
+class CommaSeparatedEnvSettingsSource(EnvSettingsSource):
+    """
+    Environment source that keeps comma-separated values as raw strings instead of
+    forcing JSON decoding on complex fields (e.g. CORS_ORIGINS).
     """
 
     def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
@@ -81,10 +100,11 @@ class Settings(BaseSettings):
         dotenv_settings,
         file_secret_settings,
     ):
+        # Replace the default env and dotenv sources with our custom ones
         return (
             init_settings,
-            env_settings,
-            CommaSeparatedDotEnvSettingsSource(settings_cls),
+            CommaSeparatedEnvSettingsSource(settings_cls),   # handles system env
+            CommaSeparatedDotEnvSettingsSource(settings_cls), # handles .env file
             file_secret_settings,
         )
     
@@ -158,7 +178,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
     
-    # ----- DATABASE URL CLEANING (use aiomysql) -----
+    # ----- DATABASE URL CLEANING (uses aiomysql) -----
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def _clean_database_url(cls, value: Any) -> str:

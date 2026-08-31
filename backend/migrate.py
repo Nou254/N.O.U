@@ -11,48 +11,53 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ArgumentError
 from dotenv import load_dotenv
 
-# Load environment variables from .env in the current directory
+# Load environment variables from .env
 load_dotenv()
 
 raw_url = os.getenv("DATABASE_URL")
-print(f"Raw value from os.getenv: {repr(raw_url)}")
-
 if not raw_url:
     raise ValueError("DATABASE_URL not set in .env")
 
-# ---- CLEANUP ----
-# Remove any leading/trailing whitespace
+# Clean the URL (strip prefix, quotes, etc.)
 raw_url = raw_url.strip()
-
-# If the value starts with "DATABASE_URL=" (misformatted .env), strip that prefix
 if raw_url.startswith("DATABASE_URL="):
-    raw_url = raw_url[len("DATABASE_URL="):]
-    print(f"Stripped prefix: {repr(raw_url)}")
-
-# Remove surrounding quotes if any (e.g., 'mysql...' or "mysql...")
+    raw_url = raw_url[len("DATABASE_URL="):].strip()
 if raw_url.startswith(("'", '"')) and raw_url.endswith(("'", '"')):
     raw_url = raw_url[1:-1]
-    print(f"Stripped quotes: {repr(raw_url)}")
 
 DATABASE_URL = raw_url
 print(f"Cleaned DATABASE_URL: {repr(DATABASE_URL)}")
 
-# Ensure we use pymysql driver
-if DATABASE_URL.startswith("mysql://"):
+# Ensure we use pymysql (sync driver)
+if DATABASE_URL.startswith("mysql+asyncmy://"):
+    DATABASE_URL = DATABASE_URL.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+elif DATABASE_URL.startswith("mysql+aiomysql://"):
+    DATABASE_URL = DATABASE_URL.replace("mysql+aiomysql://", "mysql+pymysql://", 1)
+elif DATABASE_URL.startswith("mysql://") and "+" not in DATABASE_URL[:10]:
     DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
 elif DATABASE_URL.startswith("mysql+mysqldb://"):
     DATABASE_URL = DATABASE_URL.replace("mysql+mysqldb://", "mysql+pymysql://", 1)
 
-# ---- URL‑encoding (only if needed) ----
-# Quick check: if the URL contains "@" and "://", we can safely assume it's valid
-# We'll only encode if parsing fails later.
+# ---- SSL configuration for pymysql ----
+try:
+    import certifi
+    ca_certs = certifi.where()
+except ImportError:
+    # On Windows, if certifi is not installed, disable verification
+    # (only for local migration, do not use in production)
+    ca_certs = None
+    print("certifi not found; SSL verification will be disabled for this migration.")
 
-# Create engine with SSL configuration
-connect_args = {
-    "ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}  # for Render; adjust for Windows
-}
-# On Windows, this file may not exist – you can remove connect_args or use {}.
+# Build connect_args
+if ca_certs:
+    connect_args = {"ssl": {"ca": ca_certs}}
+else:
+    # Disable verification (local only)
+    import ssl
+    ssl_context = ssl._create_unverified_context()
+    connect_args = {"ssl": ssl_context}
 
+# Create engine
 try:
     engine = create_engine(
         DATABASE_URL,
@@ -62,41 +67,8 @@ try:
     )
 except ArgumentError as e:
     print(f"ERROR: Could not parse SQLAlchemy URL: {e}")
-    print(f"Problematic URL string: {repr(DATABASE_URL)}")
-    print("Attempting to manually encode user and password...")
-    # Manual encoding: split at '@' and encode user:pass part
-    if "@" in DATABASE_URL:
-        prefix, rest = DATABASE_URL.split("@", 1)
-        # prefix is like "mysql+pymysql://user:pass"
-        if "://" in prefix:
-            scheme, user_pass = prefix.split("://", 1)
-        else:
-            scheme = "mysql+pymysql"
-            user_pass = prefix
-        if ":" in user_pass:
-            user, password = user_pass.split(":", 1)
-        else:
-            user = user_pass
-            password = ""
-        user_enc = quote_plus(user)
-        pass_enc = quote_plus(password)
-        new_url = f"{scheme}://{user_enc}:{pass_enc}@{rest}"
-        print(f"Rebuilt URL: {repr(new_url)}")
-        DATABASE_URL = new_url
-        # Try again
-        try:
-            engine = create_engine(
-                DATABASE_URL,
-                connect_args=connect_args,
-                pool_pre_ping=True,
-                pool_recycle=1800,
-            )
-        except Exception as e2:
-            print(f"Still failing: {e2}")
-            sys.exit(1)
-    else:
-        print("Could not fix URL – no '@' found.")
-        sys.exit(1)
+    print(f"Problematic URL: {repr(DATABASE_URL)}")
+    sys.exit(1)
 
 # ------------------------------------------------------------------
 # Column additions – (table, column, column DDL)

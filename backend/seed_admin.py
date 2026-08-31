@@ -11,10 +11,19 @@ Run: python seed_admin.py
 """
 import asyncio
 import os
+import sys
 
+from dotenv import load_dotenv
 from sqlalchemy import select
 
-from app.core.database import async_session_factory
+# ---- Windows event-loop fix ----
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Load environment variables from .env
+load_dotenv()
+
+from app.core.database import async_session_factory, init_db
 from app.core.security import get_password_hash
 from app.models.user import User
 
@@ -30,6 +39,11 @@ def _env_or_exit(name: str) -> str:
 
 
 async def main() -> None:
+    # ---- Ensure all tables exist ----
+    print("Creating tables if they don't exist...")
+    await init_db()
+    print("Tables ready.")
+
     admin_email = _env_or_exit("NOU_ADMIN_EMAIL").lower()
     admin_password = _env_or_exit("NOU_ADMIN_PASSWORD")
     admin_first = os.environ.get("NOU_ADMIN_FIRST", "N.O.U")
