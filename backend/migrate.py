@@ -1,28 +1,105 @@
 """
-N.O.U Digital Systems - database migration runner.
-
-The ORM auto-creates *missing tables* at startup, but it never alters an
-existing table. This script applies the ALTERs needed after the 2026-08-07
-feature build (investor questions, onboarding fields, key pool) in an
-idempotent way: every column/table is checked against information_schema
-first, so it is safe to re-run any number of times.
-
-Usage (from backend/):
-    python migrate.py
-
-It prints what it did:
-    [skip]  investor_interests.monthly_investment (already exists)
-    [added] investor_interests.joining_fee_paid
+N.O.U Digital Systems - database migration runner (sync version).
+Idempotent: checks each column/table via information_schema.
+Usage (from backend/): python migrate.py
 """
 
-import asyncio
+import os
+import sys
+from urllib.parse import quote_plus
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ArgumentError
+from dotenv import load_dotenv
 
-from sqlalchemy import text
+# Load environment variables from .env in the current directory
+load_dotenv()
 
-from app.core.database import engine
+raw_url = os.getenv("DATABASE_URL")
+print(f"Raw value from os.getenv: {repr(raw_url)}")
 
+if not raw_url:
+    raise ValueError("DATABASE_URL not set in .env")
 
-# (table, column, column DDL) - columns added to existing tables.
+# ---- CLEANUP ----
+# Remove any leading/trailing whitespace
+raw_url = raw_url.strip()
+
+# If the value starts with "DATABASE_URL=" (misformatted .env), strip that prefix
+if raw_url.startswith("DATABASE_URL="):
+    raw_url = raw_url[len("DATABASE_URL="):]
+    print(f"Stripped prefix: {repr(raw_url)}")
+
+# Remove surrounding quotes if any (e.g., 'mysql...' or "mysql...")
+if raw_url.startswith(("'", '"')) and raw_url.endswith(("'", '"')):
+    raw_url = raw_url[1:-1]
+    print(f"Stripped quotes: {repr(raw_url)}")
+
+DATABASE_URL = raw_url
+print(f"Cleaned DATABASE_URL: {repr(DATABASE_URL)}")
+
+# Ensure we use pymysql driver
+if DATABASE_URL.startswith("mysql://"):
+    DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
+elif DATABASE_URL.startswith("mysql+mysqldb://"):
+    DATABASE_URL = DATABASE_URL.replace("mysql+mysqldb://", "mysql+pymysql://", 1)
+
+# ---- URL‑encoding (only if needed) ----
+# Quick check: if the URL contains "@" and "://", we can safely assume it's valid
+# We'll only encode if parsing fails later.
+
+# Create engine with SSL configuration
+connect_args = {
+    "ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}  # for Render; adjust for Windows
+}
+# On Windows, this file may not exist – you can remove connect_args or use {}.
+
+try:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
+except ArgumentError as e:
+    print(f"ERROR: Could not parse SQLAlchemy URL: {e}")
+    print(f"Problematic URL string: {repr(DATABASE_URL)}")
+    print("Attempting to manually encode user and password...")
+    # Manual encoding: split at '@' and encode user:pass part
+    if "@" in DATABASE_URL:
+        prefix, rest = DATABASE_URL.split("@", 1)
+        # prefix is like "mysql+pymysql://user:pass"
+        if "://" in prefix:
+            scheme, user_pass = prefix.split("://", 1)
+        else:
+            scheme = "mysql+pymysql"
+            user_pass = prefix
+        if ":" in user_pass:
+            user, password = user_pass.split(":", 1)
+        else:
+            user = user_pass
+            password = ""
+        user_enc = quote_plus(user)
+        pass_enc = quote_plus(password)
+        new_url = f"{scheme}://{user_enc}:{pass_enc}@{rest}"
+        print(f"Rebuilt URL: {repr(new_url)}")
+        DATABASE_URL = new_url
+        # Try again
+        try:
+            engine = create_engine(
+                DATABASE_URL,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+                pool_recycle=1800,
+            )
+        except Exception as e2:
+            print(f"Still failing: {e2}")
+            sys.exit(1)
+    else:
+        print("Could not fix URL – no '@' found.")
+        sys.exit(1)
+
+# ------------------------------------------------------------------
+# Column additions – (table, column, column DDL)
 COLUMN_ALTERS = [
     ("investor_interests", "monthly_investment", "DECIMAL(14,2) NULL"),
     ("investor_interests", "expectations", "TEXT NULL"),
@@ -35,25 +112,20 @@ COLUMN_ALTERS = [
     ("assessment_sessions", "onboarding_notes", "TEXT NULL"),
     ("users", "is_active", "TINYINT(1) DEFAULT 1"),
     ("users", "terms_accepted_at", "DATETIME NULL"),
-    # Organization policies agreement (approved personnel first login).
     ("users", "policies_accepted_at", "DATETIME NULL"),
-    # Developer handles (@username) + applicant's place of qualification.
     ("users", "username", "VARCHAR(30) NULL"),
     ("users", "qualification_category_id", "INT NULL"),
     ("users", "qualification_position_id", "INT NULL"),
     ("users", "qualification_category_name", "VARCHAR(120) NULL"),
     ("users", "qualification_position_name", "VARCHAR(120) NULL"),
-    # Applicant contact details + CV (public apply form + assessment page).
     ("users", "phone", "VARCHAR(30) NULL"),
     ("users", "cv_file_path", "VARCHAR(500) NULL"),
-    # Groq-generated CV review summary (admin HR screens).
     ("users", "cv_summary", "TEXT NULL"),
     ("applications", "category_id", "INT NULL"),
     ("applications", "position_id", "INT NULL"),
     ("applications", "category_name", "VARCHAR(120) NULL"),
     ("applications", "position_name", "VARCHAR(120) NULL"),
     ("applications", "phone", "VARCHAR(30) NULL"),
-    # Company projects: gallery section + admin-graded weekly progress.
     ("products", "status", "VARCHAR(30) NOT NULL DEFAULT 'Available'"),
     ("products", "platforms", "VARCHAR(200) NOT NULL DEFAULT 'Web'"),
     ("products", "licence", "VARCHAR(200) NULL"),
@@ -66,10 +138,8 @@ COLUMN_ALTERS = [
     ("project_progress_reports", "admin_percentage", "DECIMAL(5,2) NULL"),
     ("project_progress_reports", "graded_by", "INT NULL"),
     ("project_progress_reports", "graded_at", "DATETIME NULL"),
-    # Customer project requests: quotation/payment lifecycle (today.md).
     ("project_requests", "request_number", "VARCHAR(30) NULL"),
     ("project_requests", "status", "VARCHAR(40) NOT NULL DEFAULT 'submitted'"),
-    # Technical services on customer requests (Wi-Fi/CCTV/consultancy).
     ("project_requests", "service_type", "VARCHAR(50) NOT NULL DEFAULT 'software_development'"),
     ("project_requests", "location", "VARCHAR(255) NULL"),
     ("project_requests", "quotation_amount", "DECIMAL(14,2) NULL"),
@@ -88,7 +158,6 @@ COLUMN_ALTERS = [
     ("project_requests", "agreed_at", "DATETIME NULL"),
     ("project_requests", "paid_amount", "DECIMAL(14,2) DEFAULT 0"),
     ("project_requests", "activated_at", "DATETIME NULL"),
-    # Personnel categories/positions + 5-part assessment framework.
     ("assessment_sessions", "category_id", "INT NULL"),
     ("assessment_sessions", "position_id", "INT NULL"),
     ("assessment_sessions", "category_name", "VARCHAR(120) NULL"),
@@ -98,14 +167,9 @@ COLUMN_ALTERS = [
     ("assessment_sessions", "recommended_category", "VARCHAR(120) NULL"),
     ("assessment_session_questions", "part", "VARCHAR(30) DEFAULT 'position'"),
     ("assessment_session_questions", "question_type", "VARCHAR(30) DEFAULT 'written_explanation'"),
-    # Project lifecycle + staffing + document approval workflow.
-    # Support contributions + department communities.
     ("community_posts", "department", "VARCHAR(120) NULL"),
-    # Community chat: public visitors post with a display name + optional
-    # email instead of an account (freedom of expression, admin approves).
     ("community_posts", "guest_name", "VARCHAR(120) NULL"),
     ("community_posts", "guest_email", "VARCHAR(255) NULL"),
-    # Guest N.O.U Lite orders (chat without an account).
     ("nou_lite_orders", "guest_email", "VARCHAR(255) NULL"),
     ("company_projects", "lifecycle_stage", "VARCHAR(40) DEFAULT 'requested'"),
     ("project_documents", "doc_status", "VARCHAR(30) DEFAULT 'draft'"),
@@ -115,93 +179,74 @@ COLUMN_ALTERS = [
     ("project_documents", "reviewed_at", "DATETIME NULL"),
 ]
 
-# (table, column, new DDL) - MODIFY existing columns (e.g. dropping NOT NULL).
+# Modifications (ALTER MODIFY) – (table, column, new DDL)
 COLUMN_MODIFIES = [
-    # Support contributions have no project request - allow NULL.
     ("project_payments", "project_request_id", "INT NULL"),
-    # Guest N.O.U Lite chat: orders may have no customer account.
     ("nou_lite_orders", "customer_id", "INT NULL"),
-    # Community chat: public visitors have no user account - author_id NULL.
     ("community_posts", "author_id", "INT NULL"),
 ]
 
-# (table) - tables that the ORM auto-creates at startup; reported for clarity.
+# Tables that the ORM auto‑creates – just for reporting
 EXPECTED_TABLES = [
-    "company_projects",
-    "project_members",
-    "project_documents",
-    "project_chat_messages",
-    "extra_developer_requests",
-    "project_progress_reports",
-    "project_help_requests",
-    "project_deadline_extensions",
-    "announcements",
-    "nou_lite_orders",
-    "ai_key_usage",
-    "project_requests",
-    "project_payments",
-    "project_releases",
-    "community_posts",
-    "personnel_categories",
-    "personnel_positions",
-    "staffing_plan_items",
-    "expression_of_interests",
-    "project_change_requests",
-    "site_policies",
+    "company_projects", "project_members", "project_documents",
+    "project_chat_messages", "extra_developer_requests", "project_progress_reports",
+    "project_help_requests", "project_deadline_extensions", "announcements",
+    "nou_lite_orders", "ai_key_usage", "project_requests", "project_payments",
+    "project_releases", "community_posts", "personnel_categories",
+    "personnel_positions", "staffing_plan_items", "expression_of_interests",
+    "project_change_requests", "site_policies",
 ]
 
+# ------------------------------------------------------------------
+def table_exists(conn, table: str) -> bool:
+    result = conn.execute(
+        text("SELECT COUNT(*) FROM information_schema.TABLES "
+             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t"),
+        {"t": table}
+    )
+    return result.scalar() > 0
 
-async def table_exists(conn, table: str) -> bool:
-    row = await conn.execute(text(
-        "SELECT COUNT(*) FROM information_schema.TABLES "
-        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t"
-    ), {"t": table})
-    return row.scalar() > 0
+def column_exists(conn, table: str, column: str) -> bool:
+    result = conn.execute(
+        text("SELECT COUNT(*) FROM information_schema.COLUMNS "
+             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"),
+        {"t": table, "c": column}
+    )
+    return result.scalar() > 0
 
-
-async def column_exists(conn, table: str, column: str) -> bool:
-    row = await conn.execute(text(
-        "SELECT COUNT(*) FROM information_schema.COLUMNS "
-        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"
-    ), {"t": table, "c": column})
-    return row.scalar() > 0
-
-
-async def run() -> None:
-    print("N.O.U database migration (idempotent)\n")
-    async with engine.begin() as conn:
-        # 1. Column ALTERs on existing tables.
+def run():
+    print("N.O.U database migration (idempotent, sync version)\n")
+    with engine.begin() as conn:
+        # 1. Add columns
         for table, column, ddl in COLUMN_ALTERS:
-            if not await table_exists(conn, table):
+            if not table_exists(conn, table):
                 print(f"  [warn] table {table} missing - will be created by the ORM at startup")
                 continue
-            if await column_exists(conn, table, column):
+            if column_exists(conn, table, column):
                 print(f"  [skip] {table}.{column} (already exists)")
                 continue
-            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
             print(f"  [added] {table}.{column}")
 
-        # 1b. MODIFY existing columns (nullability / type changes).
+        # 2. Modify columns (nullability / type)
         for table, column, ddl in COLUMN_MODIFIES:
-            if not await table_exists(conn, table):
+            if not table_exists(conn, table):
                 print(f"  [warn] table {table} missing - will be created by the ORM at startup")
                 continue
-            if not await column_exists(conn, table, column):
+            if not column_exists(conn, table, column):
                 print(f"  [warn] {table}.{column} missing - skipped (add via COLUMN_ALTERS)")
                 continue
-            await conn.execute(text(f"ALTER TABLE {table} MODIFY COLUMN {column} {ddl}"))
+            conn.execute(text(f"ALTER TABLE {table} MODIFY COLUMN {column} {ddl}"))
             print(f"  [modified] {table}.{column} -> {ddl}")
 
-        # 2. Expected tables - report presence (ORM creates them at startup).
+        # 3. Report expected tables
         print()
         for table in EXPECTED_TABLES:
-            exists = await table_exists(conn, table)
+            exists = table_exists(conn, table)
             print(f"  [{'ok' if exists else 'absent'}] {table}"
                   + ("" if exists else " (ORM creates at next startup)"))
 
-    print("\nDone. Columns added; missing tables are auto-created when the "
-          "backend starts (app.main lifespan).")
-
+    print("\nDone. Columns added; missing tables are auto-created when the backend starts.")
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run()

@@ -4,7 +4,13 @@ Centralized web platform for customer interaction, software distribution,
 and competency-based technical recruitment.
 """
 
+# ===== WINDOWS FIX: Switch to SelectorEventLoop to avoid SSL/WinError 87 =====
+import sys
 import asyncio
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# ===== END FIX =====
+
 import threading
 import time
 from contextlib import asynccontextmanager

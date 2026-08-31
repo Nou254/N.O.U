@@ -6,6 +6,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from pydantic_settings.sources import DotEnvSettingsSource
 from typing import List, Optional, Any
+import re
 
 
 class CommaSeparatedDotEnvSettingsSource(DotEnvSettingsSource):
@@ -36,28 +37,21 @@ class Settings(BaseSettings):
     APP_NAME: str = "N.O.U Digital Systems"
     APP_VERSION: str = "1.0.0"
     ENVIRONMENT: str = "development"
-    # Debug is enabled explicitly via .env for local development only; the
-    # default is safe for production. (Pentest finding L5)
     DEBUG: bool = False
     
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
-    # Database - REQUIRED from .env (never hardcoded - pentest finding).
-    # Use 127.0.0.1 (not localhost) to avoid Windows IPv6 (::1) resolution
-    # hangs with aiomysql. Example:
-    #   DATABASE_URL=mysql+aiomysql://root:password@127.0.0.1:3306/nou_database
+    # Database - REQUIRED from .env.
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
 
-    # Security - REQUIRED from .env (a strong random secret, 32+ chars -
-    # pentest finding: previously had a known public default value).
+    # Security - REQUIRED from .env.
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
 
-    # Admin bootstrap credentials - used ONLY by seed_admin.py and
-    # cleanup_database.py (never hardcoded in source - pentest finding).
+    # Admin bootstrap credentials
     NOU_ADMIN_EMAIL: Optional[str] = None
     NOU_ADMIN_PASSWORD: Optional[str] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
@@ -97,10 +91,7 @@ class Settings(BaseSettings):
     # File Upload
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
-    # Software releases (.apk/.zip/.exe/...) are much larger than documents.
     MAX_RELEASE_SIZE: int = 300 * 1024 * 1024  # 300MB
-    # Extensions allowed for customer software downloads (validated by name,
-    # since browsers report inconsistent MIME types for binaries).
     ALLOWED_RELEASE_EXTENSIONS: List[str] = [
         ".apk", ".aab", ".zip", ".exe", ".msi", ".dmg", ".ipa", ".jar",
         ".deb", ".rpm", ".tar.gz", ".tgz", ".7z", ".rar", ".bin",
@@ -126,24 +117,18 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: Optional[str] = None
     EMAILS_FROM_NAME: Optional[str] = None
     
-    # Redis (optional - for caching)
+    # Redis (optional)
     REDIS_URL: Optional[str] = None
 
     # AI Assessment (Groq)
-    # Get a free API key at https://console.groq.com/keys
     GROQ_API_KEY: Optional[str] = None
     GROQ_API_KEYS: List[str] = []
-    # Per-feature key pools (comma-separated in .env, see groq_apis.md which
-    # was moved into .env). Each AI section draws from its own pool so one
-    # feature cannot exhaust another's quota.
-    GROQ_ASSESSMENT_KEYS: List[str] = []   # question generation + grading
-    GROQ_CHATBOT_KEYS: List[str] = []      # N.O.U Lite customer assistant
-    GROQ_COMMUNITY_KEYS: List[str] = []    # project chat / community AI
+    GROQ_ASSESSMENT_KEYS: List[str] = []
+    GROQ_CHATBOT_KEYS: List[str] = []
+    GROQ_COMMUNITY_KEYS: List[str] = []
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TIMEOUT: int = 120
 
-    # Groq key pool rules: each AI section gets KEYS_PER_SECTION keys per day;
-    # if a section exhausts them, it is topped up with KEYS_TOP_UP more.
     GROQ_KEYS_PER_SECTION: int = 10
     GROQ_KEYS_TOP_UP: int = 2
 
@@ -156,31 +141,61 @@ class Settings(BaseSettings):
             return []
         return value
 
-    # ------------------------------------------------------------------
-    # Payments - M-Pesa Daraja C2B (Kenya) + Flutterwave (cards)
-    # Leave the keys empty to run in SIMULATION mode (records the payment as
-    # pending without contacting the provider). Fill them in backend/.env
-    # when the credentials are ready.
-    # ------------------------------------------------------------------
+    # M-Pesa and Flutterwave
     MPESA_CONSUMER_KEY: Optional[str] = None
     MPESA_CONSUMER_SECRET: Optional[str] = None
-    MPESA_SHORTCODE: Optional[str] = None          # paybill/till number
-    MPESA_PASSKEY: Optional[str] = None            # Daraja lipa-na-mpesa passkey
-    MPESA_ENV: str = "sandbox"                    # sandbox | live
-    # Public base URL used to build the C2B callback/validation URLs that
-    # Safaricom calls (e.g. https://api.yourdomain.com). In local dev the
-    # sandbox dashboard can be pointed at a tunnelled URL.
+    MPESA_SHORTCODE: Optional[str] = None
+    MPESA_PASSKEY: Optional[str] = None
+    MPESA_ENV: str = "sandbox"
     MPESA_CALLBACK_BASE_URL: Optional[str] = None
 
     FLUTTERWAVE_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_PUBLIC_KEY: Optional[str] = None
     FLUTTERWAVE_WEBHOOK_SECRET_HASH: Optional[str] = None
-    # Base URL of the site (used for Flutterwave redirect_url + hosted page).
     FRONTEND_BASE_URL: str = "http://localhost:3000"
     
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
+    
+    # ----- DATABASE URL CLEANING (use aiomysql) -----
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _clean_database_url(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("DATABASE_URL must be a string")
+        value = value.strip()
+        if value.startswith("DATABASE_URL="):
+            value = value[len("DATABASE_URL="):].strip()
+        if value.startswith(("'", '"')) and value.endswith(("'", '"')):
+            value = value[1:-1]
+
+        # Remove SSL query params (we'll handle via connect_args)
+        value = re.sub(r'[?&]ssl_verify_cert=[^&]*', '', value)
+        value = re.sub(r'[?&]ssl_verify_identity=[^&]*', '', value)
+        value = re.sub(r'\?&', '?', value)
+        value = re.sub(r'&$', '', value)
+        if value.endswith('?'):
+            value = value[:-1]
+
+        # ---- Switch to aiomysql (more stable on Windows) ----
+        if value.startswith("mysql+pymysql://"):
+            value = value.replace("mysql+pymysql://", "mysql+aiomysql://", 1)
+        elif value.startswith("mysql+mysqldb://"):
+            value = value.replace("mysql+mysqldb://", "mysql+aiomysql://", 1)
+        elif value.startswith("mysql://"):
+            value = value.replace("mysql://", "mysql+aiomysql://", 1)
+        elif value.startswith("mysql+asyncmy://"):
+            value = value.replace("mysql+asyncmy://", "mysql+aiomysql://", 1)
+
+        # Ensure charset
+        if "charset=utf8mb4" not in value:
+            if "?" in value:
+                value += "&charset=utf8mb4"
+            else:
+                value += "?charset=utf8mb4"
+
+        return value
     
     class Config:
         env_file = ".env"
@@ -188,7 +203,7 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
-# Create settings instance
+# Create the settings instance
 settings = Settings()
 
 
