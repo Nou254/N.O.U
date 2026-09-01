@@ -38,37 +38,45 @@ async def main() -> None:
         print(f"[shard {shard}] staggering {stagger:.0f}s", flush=True)
         await asyncio.sleep(stagger)
 
+    # ---- Fetch category IDs and names as plain values ----
     async with async_session_factory() as db:
-        cats = (
-            await db.execute(
-                select(PersonnelCategory)
-                .where(PersonnelCategory.is_active == "active")
-                .order_by(PersonnelCategory.name)
-            )
-        ).scalars().all()
+        result = await db.execute(
+            select(PersonnelCategory.id, PersonnelCategory.name)
+            .where(PersonnelCategory.is_active == "active")
+            .order_by(PersonnelCategory.name)
+        )
+        categories = result.all()  # list of (id, name)
 
-        todo = []
-        for c in cats:
-            counts = await bank_counts(db, c.id)
+    # ---- Determine which categories need banks ----
+    todo = []
+    for cat_id, cat_name in categories:
+        # Use a fresh session just to check counts
+        async with async_session_factory() as check_db:
+            counts = await bank_counts(check_db, cat_id)
             if sum(counts.values()) < TARGET:
-                todo.append(c)
+                todo.append((cat_id, cat_name))
 
-        mine = (todo[shard::shards] if shards > 1 else todo)[:max_count]
-        print(f"[shard {shard}] {len(todo)} categories need banks; this shard has {len(mine)}", flush=True)
+    mine = (todo[shard::shards] if shards > 1 else todo)[:max_count]
+    print(f"[shard {shard}] {len(todo)} categories need banks; this shard has {len(mine)}", flush=True)
 
-        ok = 0
-        for cat in mine:
-            # Snapshot plain values BEFORE any transaction: rollbacks and
-            # commits expire ORM attributes, and reloading them in async
-            # context crashes (MissingGreenlet).
-            cat_id = cat.id
-            cat_name = cat.name
-            t0 = time.time()
-            done = False
-            # Retry once per category: a daily-token-quota failure exhausts one
-            # key, and the pool then rotates to a fresh key for the retry.
-            for attempt in range(1, 3):
-                try:
+    ok = 0
+    for cat_id, cat_name in mine:
+        t0 = time.time()
+        done = False
+        # Retry once per category: a daily-token-quota failure exhausts one
+        # key, and the pool then rotates to a fresh key for the retry.
+        for attempt in range(1, 3):
+            try:
+                # ---- Use a fresh session for this category ----
+                async with async_session_factory() as db:
+                    # Fetch the category object fresh
+                    cat = await db.get(PersonnelCategory, cat_id)
+                    if cat is None:
+                        print(
+                            f"[shard {shard}] ERR {cat_name}: category not found",
+                            flush=True,
+                        )
+                        break
                     counts = await ensure_bank(
                         db, cat, questions_per_part=BANK_QUESTIONS_PER_PART
                     )
@@ -82,37 +90,27 @@ async def main() -> None:
                         flush=True,
                     )
                     break
-                except Exception as exc:  # noqa: BLE001 - report and continue
-                    try:
-                        await db.rollback()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if attempt < 2:
-                        # The rollback expired the category object - fetch a
-                        # fresh one so the retry works with a live instance.
-                        try:
-                            cat = await db.get(PersonnelCategory, cat_id)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        print(
-                            f"[shard {shard}] retry {cat_name} after "
-                            f"{type(exc).__name__} (key rotation)",
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            f"[shard {shard}] ERR {cat_name}: {type(exc).__name__}: "
-                            f"{str(exc)[:140]}",
-                            flush=True,
-                        )
-            if not done:
-                print(
-                    f"[shard {shard}] WARN {cat_name}: failed both attempts - "
-                    "will be picked up by a later run",
-                    flush=True,
-                )
+            except Exception as exc:  # noqa: BLE001 - report and continue
+                if attempt < 2:
+                    print(
+                        f"[shard {shard}] retry {cat_name} after "
+                        f"{type(exc).__name__} (key rotation)",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[shard {shard}] ERR {cat_name}: {type(exc).__name__}: "
+                        f"{str(exc)[:140]}",
+                        flush=True,
+                    )
+        if not done:
+            print(
+                f"[shard {shard}] WARN {cat_name}: failed both attempts - "
+                "will be picked up by a later run",
+                flush=True,
+            )
 
-        print(f"[shard {shard}] DONE ({ok}/{len(mine)} ok)", flush=True)
+    print(f"[shard {shard}] DONE ({ok}/{len(mine)} ok)", flush=True)
 
 
 if __name__ == "__main__":

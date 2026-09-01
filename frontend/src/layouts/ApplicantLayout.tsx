@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAppSelector, useAppDispatch } from '../hooks/useAppSelector'
 import { logout } from '../store/authSlice'
@@ -7,6 +8,11 @@ const ApplicantLayout = () => {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const { user } = useAppSelector((state) => state.auth)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
 
   const handleLogout = () => {
     dispatch(logout())
@@ -21,8 +27,31 @@ const ApplicantLayout = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Mobile header */}
+      <div className="mobile-header">
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="p-2 rounded-lg text-gray-600 hover:bg-gray-100"
+          aria-label="Toggle menu"
+        >
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <Link to="/applicant/assessment/general" className="flex items-center space-x-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-primary-800 rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-sm">N</span>
+          </div>
+          <span className="text-lg font-bold text-gray-900">N.O.U</span>
+        </Link>
+        <div className="w-9"></div>
+      </div>
+
+      {/* Sidebar overlay */}
+      <div className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
+
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="p-4 border-b border-gray-200">

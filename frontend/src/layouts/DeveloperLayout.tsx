@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAppSelector, useAppDispatch } from '../hooks/useAppSelector'
 import { logout, setUsername } from '../store/authSlice'
@@ -9,6 +9,7 @@ const DeveloperLayout = () => {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const { user } = useAppSelector((state) => state.auth)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [handleInput, setHandleInput] = useState('')
   const [savingHandle, setSavingHandle] = useState(false)
 
@@ -43,10 +44,37 @@ const DeveloperLayout = () => {
     { name: 'Change password', href: '/change-password', icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z' },
   ]
 
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Mobile header */}
+      <div className="mobile-header">
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="p-2 rounded-lg text-gray-600 hover:bg-gray-100"
+          aria-label="Toggle menu"
+        >
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <Link to="/portal" className="flex items-center space-x-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-primary-800 rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-sm">N</span>
+          </div>
+          <span className="text-lg font-bold text-gray-900">Developer</span>
+        </Link>
+        <div className="w-9"></div>
+      </div>
+
+      {/* Sidebar overlay */}
+      <div className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
+
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="p-4 border-b border-gray-200">
