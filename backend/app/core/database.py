@@ -17,10 +17,12 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ---- SSL configuration ----
-# On Windows, we disable certificate verification for local development.
+# On Windows, use a minimal TLS context to avoid WinError 87 with
+# aiomysql + SelectorEventLoop (Python 3.14 OpenSSL 3.5).
 # On Linux (Render), we use full verification with certifi.
 if sys.platform == "win32":
-    ssl_context = ssl.create_default_context()
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
 else:

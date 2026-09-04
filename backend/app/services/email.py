@@ -39,11 +39,11 @@ _DEV_LOG_PATH = Path(__file__).resolve().parent.parent.parent / "logs" / "emails
 # SMTP circuit breaker
 # ---------------------------------------------------------------------------
 # Short connect timeout: a slow/down SMTP host must not block the request.
-SMTP_TIMEOUT_SECONDS = 5
+SMTP_TIMEOUT_SECONDS = 15
 # After this many consecutive failures, stop trying SMTP for a while.
-SMTP_MAX_CONSECUTIVE_FAILURES = 2
+SMTP_MAX_CONSECUTIVE_FAILURES = 3
 # Cooldown before trying SMTP again after the breaker opens.
-SMTP_BREAKER_COOLDOWN_SECONDS = 300
+SMTP_BREAKER_COOLDOWN_SECONDS = 60
 
 _smtp_lock = threading.Lock()
 _smtp_failures = 0

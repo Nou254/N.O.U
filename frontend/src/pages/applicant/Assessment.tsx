@@ -233,6 +233,7 @@ const AssessmentPage = () => {
   // instead of showing an endless "Preparing…" spinner.
   const refetchAttemptedRef = useRef(false)
   const [questionLoadFailed, setQuestionLoadFailed] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const reloadSessionQuestions = () => {
     setQuestionLoadFailed(false)
     dispatch(fetchActiveSession(isGuest ? guestEmail.trim() : undefined))
@@ -253,6 +254,15 @@ const AssessmentPage = () => {
     reloadSessionQuestions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession, questions.length])
+
+  // Reset the refetch flag when a NEW session starts (so a fresh start
+  // can benefit from the safety-net if needed).
+  useEffect(() => {
+    if (currentSession && questions.length > 0) {
+      refetchAttemptedRef.current = false
+      setQuestionLoadFailed(false)
+    }
+  }, [currentSession?.id, questions.length])
 
   // ---- Derived values ----------------------------------------------------
   const examPhase = Boolean(currentSession)
@@ -413,10 +423,12 @@ const AssessmentPage = () => {
   const handleSubmit = async (force = false) => {
     if (!currentSession || submittedRef.current) return
     submittedRef.current = true
+    setSubmitting(true)
 
     const unansweredCount = questions.length - answeredCount
     if (!force && unansweredCount > 0) {
       submittedRef.current = false
+      setSubmitting(false)
       const confirmed = window.confirm(
         `You have ${unansweredCount} unanswered question(s). Are you sure you want to submit?`
       )
@@ -445,6 +457,7 @@ const AssessmentPage = () => {
       }
     } catch (error) {
       submittedRef.current = false
+      setSubmitting(false)
       toast.error(error as string)
     }
   }
@@ -1171,12 +1184,12 @@ const AssessmentPage = () => {
               <button
                 onClick={() => {
                   setShowConfirm(false)
-                  handleSubmit()
+                  handleSubmit(true)
                 }}
-                disabled={loading}
+                disabled={loading || submitting}
                 className="btn-primary"
               >
-                {loading ? 'Submitting...' : 'Submit'}
+                {submitting ? 'Submitting...' : 'Submit'}
               </button>
             </div>
           </div>
